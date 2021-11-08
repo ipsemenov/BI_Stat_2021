@@ -1,0 +1,563 @@
+---
+title: "Olympic games project"
+author: "Ivan Semenov"
+date: "11/7/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = '../data')
+```
+
+In this analysis, we will be looking at the different characteristics of the 
+participants of the Olympic Games.
+
+## 1. Libraries installation
+
+```{r libraries}
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(psych)) install.packages("psych")
+if(!require(psych)) install.packages("tidyr")
+if(!require(ggplot2)) install.packages("ggplot2")
+if(!require(ggpubr)) install.packages("ggpubr")
+if(!require(corrplot)) install.packages("corrplot")
+if(!require(tableHTML)) install.packages("tableHTML")
+
+library(dplyr)
+library(psych)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(corrplot)
+library(tableHTML)
+```
+
+## 2. Data Loading
+
+Here we provide a function ***read_files*** which combines separate files
+from a directory into one data frame. It reuqires 2 parameters: path 
+(path to the directory where required files are located) 
+and format (type of files to combine).
+
+```{r read_files function}
+
+read_files <- function(format, path="./"){
+  
+  pattern = paste("*.", format, sep="")
+  data_all <- list.files(path = path, pattern = pattern, full.names = TRUE) %>%
+    lapply(read.csv) %>% bind_rows
+  return(data_all)
+}
+```
+
+Load data
+```{r}
+my_data <- read_files("csv")
+tableHTML(head(my_data))
+```
+
+Look at data frame structure 
+```{r}
+dplyr::glimpse(my_data)
+```
+
+The dataset has the following features:
+
+* **ID** – Unique number for each athlete
+* **Name** – Athlete's name
+* **Sex** – M or F
+* **Age** – Integer
+* **Height** – In centimeters
+* **Weight** – In kilograms
+* **Team** – Team name
+* **NOC** – National Olympic Committee 3-letter code
+* **Games** – Year and season
+* **Year** – Integer
+* **Season** – Summer or Winter
+* **City** – Host city
+* **Sport** – Sport
+* **Event** – Event
+* **Medal** – Gold, Silver, Bronze, or NA
+
+NA values in column Medal correspond to participants without any medals.
+So, replace all NA values in this column with "Participant".
+```{r}
+my_data <- my_data %>% mutate(Medal=replace_na(Medal, 'Participant'))
+```
+
+## 3. Data Cleaning
+
+### 3.1. Missing Values Exploration
+
+Look at the columns where cells with empty rows are present.
+
+```{r}
+empty_vals <- apply(my_data, 2, function(x) sum(na.omit(x) == ""))
+empty_vals <- empty_vals[empty_vals != 0]
+empty_vals_matrix <- t(as.matrix(empty_vals))
+```
+
+```{r}
+barplot_empty_vals <- barplot(empty_vals_matrix, beside=TRUE, 
+                              main="Number of empty rows", ylab = "Counts", col='steelblue', 
+                              cex.names=1., cex.axis=1., cex.lab=1., cex.main=1.2,
+                              las=2, ylim=c(0, 10))
+text(x = barplot_empty_vals, y = empty_vals_matrix, label = empty_vals, pos = 3, cex=1., col='red')
+```
+
+Replace all cells with empty rows with NA
+```{r}
+my_data_processed <- my_data %>% mutate(across(everything(), ~replace(.x, .x == '', NA)))
+```
+
+Calculate number of NA values in each column
+```{r}
+cols_na_percent <- apply(is.na(my_data_processed), 2, function(x) mean(x)*100)
+cols_na_percent <- data.frame(cols_na_percent) %>% setNames(c("missing_percent")) %>% 
+  filter(missing_percent != 0)
+cols_na_count <- colSums(is.na(my_data_processed))[colSums(is.na(my_data_processed)) != 0]
+```
+
+```{r}
+barplot_na_cols <- barplot(t(as.matrix(cols_na_percent)), beside=T, 
+                           main="Number of NA values", ylab = "percentage, %", 
+                           col="steelblue", ylim = c(0, 25), las=2, 
+                           cex.names=1., cex.axis=1., cex.lab=1., cex.main=1.2)
+text(x = barplot_na_cols, y = t(as.matrix(cols_na_percent)), 
+     label = cols_na_count, pos = 3, cex = .8, col='red')
+```
+
+Calculate occurence of NA values in rows
+```{r}
+rows_na_count <- table(rowSums(is.na(my_data_processed)))
+```
+
+```{r}
+barplot_na_rows <- barplot(rows_na_count, main="Number of NA values in rows", 
+                           xlab = "Number of NA values", ylab = "Counts",
+                           col = "steelblue", ylim = c(0, 250000),
+                           cex.names=1., cex.axis=.8, cex.lab=1., cex.main=1.2)
+text(x = barplot_na_rows, y = rows_na_count, label = rows_na_count, pos = 3, cex = .8, col='red')
+```
+
+Look at the rows with the highest number of NA values
+```{r}
+tableHTML(my_data_processed[rowSums(is.na(my_data_processed)) == 14 |
+                              rowSums(is.na(my_data_processed)) == 13,])
+```
+
+As we can see, almost all information is missing. So, we can drop these rows withot
+loosing any information
+```{r}
+my_data_processed <- my_data_processed[rowSums(is.na(my_data_processed)) != 14 &
+                                       rowSums(is.na(my_data_processed)) != 13,]
+```
+
+### 3.2. Outliers exploration
+
+* ### Feature: Sex
+
+We can see that there are some wrong values for Sex feature: 
+not only male and female are present.
+```{r}
+unique(my_data_processed$Sex)
+```
+
+Look ath this data
+```{r}
+tableHTML(my_data_processed %>% filter(is.na(Sex) | Sex == 'G'))
+```
+
+Restore people's gender based on their names
+```{r}
+my_data_processed$Sex[my_data_processed$ID == 79609] <- 'M'
+my_data_processed$Sex[my_data_processed$ID == 79630] <- 'M'
+```
+
+Convert Sex to categorial variable
+```{r}
+my_data_processed$Sex <- as.factor(my_data_processed$Sex)
+```
+
+* ### Feature: Height
+
+```{r}
+ggplot(my_data_processed, aes(x=Sex, y=Height)) + geom_boxplot(fill='violet')
+```
+
+Here we can see too high woman. Obviously, it's a mistake. So, try to fix it.
+```{r}
+height_outlier <- max(my_data_processed$Height, na.rm=T)
+tableHTML(my_data_processed %>% filter(Height == height_outlier) %>% 
+            select(c(ID, Age, NOC, Height, Weight)))
+```
+
+There are other notes for this woman (identical IDs),
+so we can replace this outlier with proper values.
+```{r}
+tableHTML(unique(my_data_processed %>% filter(ID == 23549 & Height != height_outlier) %>% select(Height)))
+```
+
+```{r}
+my_data_processed$Height[my_data_processed$Height == height_outlier] <- 176
+```
+
+* ### Feature: Weight
+
+```{r}
+ggplot(my_data_processed, aes(x=Sex, y=Weight)) + geom_boxplot(fill='violet')
+```
+
+Here we can see very fat man. Probably, it's a mistake.
+```{r}
+weight_outlier <- min(my_data_processed$Weight, na.rm=T)
+tableHTML(my_data_processed %>% filter(Weight == weight_outlier) %>% 
+            select(c(ID, Age, NOC, Height, Weight)))
+```
+
+There are other notes for this man (identical IDs),
+so we can replace this outlier with proper values.
+```{r}
+tableHTML(unique(my_data_processed %>% 
+                   filter(ID == 68370 & Weight != weight_outlier) %>% select(Weight)))
+```
+
+```{r}
+my_data_processed$Weight[my_data_processed$Weight == weight_outlier] <- 77
+```
+
+* ### Feature: Age
+
+```{r}
+ggplot(my_data_processed, aes(x=Sex, y=Age)) + geom_boxplot(fill='violet')
+```
+
+Here we can see very old man. People can not leave so long, so it's a mistake.
+```{r}
+age_outlier <- max(my_data_processed$Age, na.rm=T)
+tableHTML(my_data_processed %>% filter(Age == age_outlier) %>% 
+            select(c(ID, Age, Year, Sport)))
+```
+
+We can see that this man took part in several competitions during 1912. 
+And he was 24 year old at that time.
+```{r}
+tableHTML(my_data_processed %>% filter(ID == 23459 & Year == 1912))
+```
+
+So, replace this outlier with proper age
+```{r}
+my_data_processed$Age[my_data_processed$Age == age_outlier] <- 24
+```
+
+### 3.3. Filling missing data
+Group people by their Sex and Team and for each resulting group calculate median values for 
+Age, Height, Weight. Fill NA values in this columns with medians of corresponding groups.
+
+```{r}
+my_data_processed <- my_data_processed %>% group_by(Team, Sex) %>% 
+    mutate(across(c('Age', 'Weight', 'Height'), ~replace_na(.x, median(.x, na.rm=T))))
+```
+
+Nevetherless, we can see that there are still NA values because not for each
+NA value corresponding group was found. 
+```{r}
+colSums(is.na(my_data_processed[,c('Weight', 'Height', 'Age')]))
+```
+
+Then, let's group participants just by Sex variable. 
+And replace remaining NAs with medians in this groups.
+```{r}
+my_data_processed <- my_data_processed  %>% group_by(Sex) %>% 
+    mutate(across(c('Age', 'Weight', 'Height'), ~replace_na(.x, median(.x, na.rm=T))))
+```
+
+As we can see, all NA values disappeared
+```{r}
+colSums(is.na(my_data_processed[,c('Weight', 'Height', 'Age')]))
+```
+
+During calculation of medians and filling NA values, variables Age, Height, Weight 
+were converted to doubles. So, let's convert them back to integers.
+```{r}
+my_data_processed$Height <- as.integer(my_data_processed$Height)
+my_data_processed$Weight <- as.integer(my_data_processed$Weight)
+my_data_processed$Age <- as.integer(my_data_processed$Age)
+```
+
+Visualize remaining rows containing NA values in data frame.
+```{r}
+colSums(is.na(my_data_processed[,c('Weight', 'Height', 'Age')]))
+```
+
+There are only 7 rows with NA values. So, we can conclude that almost all data 
+was successfully cleaned.
+```{r}
+tableHTML(my_data_processed[!complete.cases(my_data_processed), ])
+```
+
+
+## 4. Exploratory Data Analysis
+
+Look at gender proportions
+```{r}
+barplot_sex <- barplot(table(my_data_processed$Sex), beside=TRUE, 
+                       main="Sex Ratio", ylim = c(0, 210000),
+                       xlab='Sex', ylab = "Count", col="steelblue",
+                       cex.names=1., cex.axis=1., cex.lab=1., cex.main=1.2)
+text(x = barplot_sex, y = table(my_data_processed$Sex), 
+     label = table(my_data_processed$Sex), pos = 3, cex = 1.)
+```
+
+Visualize Height and Weight relationship.
+```{r}
+ggplot(my_data_processed, aes(Weight, Height, size=Age)) + 
+  geom_point(color='blue', alpha=0.1) + ggtitle('Height VS Weight') + 
+    theme(
+    plot.title = element_text(size=18, face="bold", hjust=.5),
+    axis.title.x = element_text(size=12),
+    axis.title.y = element_text(size=12)
+    )
+```
+
+Look at the participants with large weights situated far away from other dots
+```{r}
+tableHTML(my_data_processed %>% ungroup() %>% arrange(desc(Weight)) %>% 
+            select(Weight,Sport) %>% slice(1:5))
+```
+
+People with large weights do Judo and Wrestling. 
+And there is nothing unususal normal such kinds of sport.
+
+Look at basic statistics of numeric variables
+```{r}
+descr <- psych::describe(select_if(my_data_processed %>% ungroup(), is.numeric), fast=TRUE)
+tableHTML(descr)
+```
+
+Then, look at the correlation of numeric variables
+```{r}
+correlation_data <- cor(select_if(my_data_processed %>% ungroup(), is.numeric),
+                        use="complete.obs")
+corrplot::corrplot(correlation_data)
+```
+
+## 5. Deep Data Analysis
+
+### Check the youngest participants (Olympiad 1992)
+```{r}
+tableHTML(my_data_processed %>% group_by(Sex) %>% filter(Year == 1992) %>%
+            summarize(min_age=min(Age)))
+```
+
+### Check statistics of Height variable (meand and sd)
+```{r}
+tableHTML(my_data_processed %>% group_by(Sex) %>% summarize(mean=round(mean(Height), 1),
+                                                            sd=round(sd(Height), 1)))
+```
+
+### Check statistics of Height variable for female tennis players (Olympiad 2000)
+```{r}
+tableHTML(my_data_processed %>% ungroup() %>% 
+            filter(Year == 2000 & Sex == 'F' & Sport == 'Tennis') %>%
+            summarize(mean=round(mean(Height), 1), sd=round(sd(Height), 1)))
+```
+
+### Check kind of sports with the most heaviest participant (Olympiad 2006)
+```{r}
+tableHTML(my_data_processed %>% ungroup() %>% filter(Year == 2006) 
+          %>% summarize(max=max(Sport)))
+```
+
+### Calculate number of medals obtained by women (1980-2010)
+```{r}
+tableHTML(my_data_processed %>% group_by(Sex) %>% 
+            filter(1980 <= Year & Year <= 2010 & Medal == 'Gold' & Sex == 'F') %>% count())
+```
+
+### Calculate number of John Aalberg's participations during different years
+```{r}
+tableHTML(my_data_processed %>% group_by(Year) %>% 
+            filter(Name == "John Aalberg") %>% count())
+```
+
+### Check the most and the least represented (by number of participants) age groups
+
+```{r}
+find_age_groups <- function(data, lower_bound, upper_bound, year){
+    n_group <- data %>% group_by(ID) %>% 
+      filter(Age >= lower_bound & Age < upper_bound & Year == year) %>% 
+        count()
+    return(nrow(n_group))
+}
+```
+
+```{r}
+group_1 <- find_age_groups(my_data_processed, 15, 25, 2008)
+paste("Group from 15 to 25 years:", group_1, "participants", sep = " ")
+
+group_2 <- find_age_groups(my_data_processed, 25, 35, 2008)
+paste("Group from 25 to 35 years:", group_2, "participnats", sep = " ")
+
+group_3 <- find_age_groups(my_data_processed, 35, 45, 2008)
+paste("Group from 35 to 45 years:", group_3, "participants", sep = " ")
+
+group_4 <- find_age_groups(my_data_processed, 45, 55, 2008)
+paste("Group from 45 to 55 years:", group_4, "participants", sep = " ")
+
+group_5 <- find_age_groups(my_data_processed, 55, 70, 2008)
+paste("Group from 55 to 70 years:", group_5, "participants", sep = " ")
+```
+
+* The largest group is a group of people from 15 to 25 years old
+* The smallest group is a group of people from 55 to 70 years old
+
+### Check changes in sports nmber for 2002 year compared to 1994
+
+```{r}
+sports_1994 <- my_data_processed %>% filter(Year == 1994) %>% ungroup() %>% select(Sport)
+sports_2002 <- my_data_processed %>% filter(Year == 2002) %>% ungroup() %>% select(Sport)
+nrow(unique(sports_2002))-nrow(unique(sports_1994))
+```
+
+### Check top 3 countries for summer and winter Olympiads
+```{r}
+find_top_countries <- function(data, season, n_top){
+    df_medals <- data %>% group_by(Season, Medal, NOC) %>% filter(Season == season) %>%
+      count(Medal) %>% arrange(desc(n))
+    df_gold <- head(df_medals[df_medals$Medal == "Gold",], n_top)
+    df_silver <- head(df_medals[df_medals$Medal == "Silver",], n_top)
+    df_bronze <- head(df_medals[df_medals$Medal == "Bronze",], n_top)
+    df_top <- rbind(df_gold, df_silver, df_bronze)
+    return(df_top)
+}
+```
+
+Top 3 countries for summer Olympiad (for each type of medal)
+```{r}
+tableHTML(find_top_countries(na.omit(my_data_processed), 'Summer', 3))
+```
+
+Top 3 countries for winter Olympiad (for each type of medal)
+```{r}
+tableHTML(find_top_countries(na.omit(my_data_processed), 'Summer', 3))
+```
+
+
+### Height standartization (z-score)
+
+Add new column with Height standartized by z-score
+```{r}
+z_score_scaling  <- function(x){
+    z_scores <- (x-mean(x))/sd(x)
+    return(z_scores)
+}
+
+my_data_processed <- my_data_processed %>% mutate(Height_z_scores = z_score_scaling(Height))
+```
+
+### Height standartization (min_max score)
+
+Add new column with Height standartized by min_max score
+```{r}
+min_max_scaling <- function(x){
+    min_max_scores <- (x-min(x))/(max(x)-min(x))
+    return(min_max_scores)
+}
+
+my_data_processed <- my_data_processed %>% mutate(Height_min_max_scaled=min_max_scaling(Height))
+```
+
+Look at new variables
+```{r}
+tableHTML(my_data_processed %>% ungroup() %>% 
+            select(Height_z_scores, Height_min_max_scaled) %>% slice(1:5))
+```
+
+### Height comparisons between male and female (winter Olympiad)
+
+Make subset with only winter Olympiads
+```{r}
+my_data_processed_winter <- my_data_processed %>% filter(Season == "Winter")
+```
+
+* **H0**: there is no difference in heights between male and female groups
+* **H1**: there is a difference in heights between male and female groups
+
+We will use nonparametric Wilcoxon test.
+
+```{r}
+wilcox.test(Height ~ Sex, my_data_processed_winter)
+```
+
+```{r}
+ggplot(my_data_processed_winter, aes(x=Sex, y=Height, fill=Sex)) + 
+    geom_boxplot() + stat_compare_means(method = "wilcox.test", comparisons=list(c('F', 'M')))
+```
+
+**Conclusion:** p-value is less than 0.05 so we can reject the null-hypothesis 
+and say that there is a statistical difference in heights between male and female groups
+
+
+### Weight comparisons between male and female (winter Olympiad)
+
+* **H0**: there is no difference in weights between male and female groups
+* **H1**: there is a difference in weights between male and female groups
+
+We will use nonparametric Wilcoxon test.
+
+```{r}
+wilcox.test(Weight ~ Sex, my_data_processed_winter)
+```
+
+```{r}
+ggplot(my_data_processed_winter, aes(x=Sex, y=Weight, fill=Sex)) + 
+    geom_boxplot() + stat_compare_means(method = "wilcox.test", comparisons=list(c('F', 'M')))
+```
+
+**Conclusion:** p-value is less than 0.05 so we can reject the null-hypothesis 
+and say that there is a statistical difference in weights between male and female groups
+
+
+### Age comparisons between male and female (winter Olympiad)
+
+* **H0**: there is no difference in ages between male and female groups
+* **H1**: there is a difference in ages between male and female groups
+
+We will use nonparametric Wilcoxon test.
+
+```{r}
+wilcox.test(Age ~ Sex, my_data_processed_winter)
+```
+
+```{r}
+ggplot(my_data_processed_winter, aes(x=Sex, y=Age, fill=Sex)) + 
+    geom_boxplot() + stat_compare_means(method = "wilcox.test", comparisons=list(c('F', 'M')))
+```
+
+**Conclusion:** p-value is less than 0.05 so we can reject the null-hypothesis 
+and say that there is a statistical difference in ages between male and female groups
+
+
+### Look at the connection between Team and Medal features
+
+* **H0:** there is no connection between team and medal features 
+(distribution does not differ from random)
+* **H1:** there is some connection between team and medal features 
+(distribution differs from random)
+
+We will use nonparametric Fisher test because many of the expected values will be very small.
+Implement this test with additional parameter **simulate.p.value = TRUE**: 
+a logical indicating whether to compute p-values by Monte Carlo simulation, 
+in larger than 2 by 2 tables.
+
+```{r}
+my_data_subset <- na.omit(my_data_processed) %>% select(Team, Medal)
+team_medal_table <- table(my_data_subset$Team, my_data_subset$Medal)
+fisher.test(team_medal_table, simulate.p.value = TRUE)
+```
+
+* **Conclusion:** p-value is less than 0.05 so we can reject the null-hypothesis 
+and say that empirical distribution statistically differs from random distribution, 
+so there is a connection between teams and medals which they obtained.
